@@ -107,7 +107,7 @@ function renderAgentWidget(pool: AgentPool): string[] | undefined {
 // Tool descriptions
 // ============================================================================
 
-const SPAWN_AGENT_DESCRIPTION = `Spawn a sub-agent for a well-scoped task. Returns the agent ID immediately — the agent runs in the background. Use send_input, wait_agent, close_agent to interact.
+const SPAWN_AGENT_DESCRIPTION = `Spawn a sub-agent for a well-scoped task. Returns the agent ID immediately — the agent runs in the background. When the agent finishes, its result is automatically delivered back to you as a notification. You can also use wait_agent to explicitly block, or send_input to send follow-ups.
 
 ### When to delegate vs. do locally
 - Plan first: identify critical-path blockers vs. sidecar tasks that can run in parallel.
@@ -121,9 +121,10 @@ const SPAWN_AGENT_DESCRIPTION = `Spawn a sub-agent for a well-scoped task. Retur
 - Narrow the ask to the concrete output you need.
 
 ### After delegating
-- Do meaningful non-overlapping work while agents run.
-- Call wait_agent ONLY when you need the result for your next step and are blocked.
-- Do not redo delegated work — integrate results.
+- Continue doing meaningful non-overlapping work while agents run in the background.
+- Agent results will be delivered to you automatically when they finish — you do not need to call wait_agent for every agent.
+- Only call wait_agent when you need the result immediately for your next step and are blocked until it arrives.
+- Do not redo delegated work — integrate results when they arrive.
 - Reuse existing agents via send_input for follow-up questions.
 
 ### Parallel patterns
@@ -200,6 +201,36 @@ export default function piSubagents(pi: ExtensionAPI): void {
 
   pool.setOnAgentUpdate(() => {
     updateWidget();
+  });
+
+  // -- Auto-notification on agent completion (steer back to main session) --
+
+  pool.setOnAgentComplete((agentId, agent) => {
+    const elapsed = Math.floor((Date.now() - agent.startTime) / 1000);
+    const typeTag = agent.agentType ? ` (${agent.agentType})` : "";
+    const response = agent.lastOutput
+      ? agent.lastOutput.length > 2000
+        ? agent.lastOutput.slice(0, 2000) + "…"
+        : agent.lastOutput
+      : "(no response)";
+    const content =
+      `Sub-agent ${agentId}${typeTag} completed (${elapsed}s).\n\n${response}`;
+
+    pi.sendMessage(
+      {
+        customType: "subagent_complete",
+        content,
+        display: true,
+        details: {
+          agent_id: agentId,
+          agent_type: agent.agentType,
+          status: agent.status,
+          elapsed,
+          task: agent.taskPreview,
+        },
+      },
+      { triggerTurn: true, deliverAs: "steer" },
+    );
   });
 
   // -- Tools --

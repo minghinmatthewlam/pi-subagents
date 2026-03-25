@@ -18,6 +18,7 @@ import {
   isFinalStatus,
   getCurrentDepth,
   getMaxDepth,
+  DEFAULT_MAX_AGENTS,
   DEFAULT_WAIT_TIMEOUT_MS,
   MIN_WAIT_TIMEOUT_MS,
   MAX_WAIT_TIMEOUT_MS,
@@ -115,12 +116,17 @@ export interface WaitResult {
 
 export type AgentEventCallback = (agentId: string, agent: ManagedAgent) => void;
 
+/** Called when an agent completes (reaches idle). */
+export type AgentCompleteCallback = (agentId: string, agent: ManagedAgent) => void;
+
 export class AgentPool {
   private agents = new Map<string, ManagedAgent>();
   private closedSessions = new Map<string, string>(); // agent ID -> session file
   private parentSessionId: string = `session-${Date.now()}`;
   private parentSessionFile: string | null = null;
   private onAgentUpdate: AgentEventCallback | null = null;
+  private onAgentComplete: AgentCompleteCallback | null = null;
+  private maxAgents: number = DEFAULT_MAX_AGENTS;
 
   setParentSession(sessionId: string, sessionFile: string | null): void {
     this.parentSessionId = sessionId;
@@ -129,6 +135,10 @@ export class AgentPool {
 
   setOnAgentUpdate(cb: AgentEventCallback | null): void {
     this.onAgentUpdate = cb;
+  }
+
+  setOnAgentComplete(cb: AgentCompleteCallback | null): void {
+    this.onAgentComplete = cb;
   }
 
   getAgents(): Map<string, ManagedAgent> {
@@ -149,6 +159,15 @@ export class AgentPool {
     if (currentDepth >= maxDepth) {
       throw new Error(
         `Agent depth limit reached (${currentDepth}/${maxDepth}). Solve the task yourself.`,
+      );
+    }
+
+    const activeCount = [...this.agents.values()].filter(
+      (a) => a.status === "starting" || a.status === "streaming" || a.status === "idle",
+    ).length;
+    if (activeCount >= this.maxAgents) {
+      throw new Error(
+        `Agent limit reached (${activeCount}/${this.maxAgents}). Close existing agents before spawning new ones.`,
       );
     }
 
@@ -517,6 +536,7 @@ export class AgentPool {
       case "agent_end":
         agent.status = "idle";
         this.resolveWaiters(agent);
+        this.notifyComplete(agentId, agent);
         this.notifyUpdate(agentId);
         break;
 
@@ -562,6 +582,12 @@ export class AgentPool {
     const agent = this.agents.get(agentId);
     if (agent && this.onAgentUpdate) {
       this.onAgentUpdate(agentId, agent);
+    }
+  }
+
+  private notifyComplete(agentId: string, agent: ManagedAgent): void {
+    if (this.onAgentComplete) {
+      this.onAgentComplete(agentId, agent);
     }
   }
 

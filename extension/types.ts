@@ -106,6 +106,7 @@ export interface RpcEvent {
 // ============================================================================
 
 export const DEFAULT_MAX_DEPTH = 2;
+export const DEFAULT_MAX_AGENTS = 16;
 export const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 export const MIN_WAIT_TIMEOUT_MS = 10_000;
 export const MAX_WAIT_TIMEOUT_MS = 3_600_000;
