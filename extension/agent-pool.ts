@@ -176,91 +176,24 @@ export class AgentPool {
     const sessionFile = join(sessionDir, `${id}.jsonl`);
     mkdirSync(dirname(sessionFile), { recursive: true });
 
-    const args = ["--mode", "rpc", "--session", sessionFile];
+    const piArgs = ["--mode", "rpc", "--session", sessionFile];
     if (options.model) {
-      args.push("--model", options.model);
+      piArgs.push("--model", options.model);
     }
     if (options.forkContext && this.parentSessionFile) {
-      args.push("--fork", this.parentSessionFile);
+      piArgs.push("--fork", this.parentSessionFile);
     }
-
-    const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
-      PI_SUBAGENT_DEPTH: String(currentDepth + 1),
-    };
-
-    const proc = spawn("pi", args, {
-      cwd: process.cwd(),
-      env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
 
     const taskPreview = options.message.split("\n").find((l) => l.trim())?.slice(0, 100) || "(no task)";
 
-    const agent: ManagedAgent = {
-      id,
-      process: proc,
-      status: "starting",
+    const agent = await this.launchProcess(id, piArgs, sessionFile, {
       agentType: options.agentType,
-      sessionFile,
-      startTime: Date.now(),
-      lastOutput: null,
       taskPreview,
-      toolCount: 0,
-      tokenCount: 0,
-      pendingRequests: new Map(),
-      requestCounter: 0,
-      idleResolvers: new Set(),
-    };
-
-    this.agents.set(id, agent);
-
-    // Set up stdout reader
-    agent.stdoutCleanup = attachLineReader(proc.stdout!, (line) => {
-      this.handleStdoutLine(id, line);
     });
-
-    // Handle process exit
-    proc.on("exit", (code) => {
-      if (agent.status !== "closed") {
-        if (code !== 0 && code !== null) {
-          agent.status = "crashed";
-          agent.error = `Process exited with code ${code}`;
-        } else {
-          agent.status = "closed";
-        }
-        this.resolveWaiters(agent);
-        this.notifyUpdate(id);
-      }
-    });
-
-    proc.on("error", (err) => {
-      agent.status = "crashed";
-      agent.error = err.message;
-      this.resolveWaiters(agent);
-      this.notifyUpdate(id);
-    });
-
-    // Collect stderr for error diagnostics
-    let stderrBuf = "";
-    proc.stderr?.on("data", (d) => {
-      stderrBuf += d.toString();
-      if (stderrBuf.length > 10_000) stderrBuf = stderrBuf.slice(-5_000);
-    });
-
-    // Wait briefly for process to initialize
-    await new Promise<void>((resolve) => setTimeout(resolve, 200));
-
-    if (proc.exitCode !== null) {
-      agent.status = "crashed";
-      agent.error = `Process exited immediately with code ${proc.exitCode}. ${stderrBuf}`;
-      this.resolveWaiters(agent);
-      throw new Error(agent.error);
-    }
 
     // Send initial prompt
     agent.status = "streaming";
-    writeRpcCommand(proc, { type: "prompt", message: options.message });
+    writeRpcCommand(agent.process, { type: "prompt", message: options.message });
     this.notifyUpdate(id);
 
     return { agent_id: id, session_file: sessionFile };
@@ -427,63 +360,11 @@ export class AgentPool {
       );
     }
 
-    const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
-      PI_SUBAGENT_DEPTH: String(currentDepth + 1),
-    };
-
-    const proc = spawn("pi", ["--mode", "rpc", "--session", sessionFile], {
-      cwd: process.cwd(),
-      env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    const agent: ManagedAgent = {
-      id,
-      process: proc,
-      status: "starting",
-      sessionFile,
-      startTime: Date.now(),
-      lastOutput: null,
+    const agent = await this.launchProcess(id, ["--mode", "rpc", "--session", sessionFile], sessionFile, {
       taskPreview: "(resumed)",
-      toolCount: 0,
-      tokenCount: 0,
-      pendingRequests: new Map(),
-      requestCounter: 0,
-      idleResolvers: new Set(),
-    };
+    });
 
-    this.agents.set(id, agent);
     this.closedSessions.delete(id);
-
-    agent.stdoutCleanup = attachLineReader(proc.stdout!, (line) => {
-      this.handleStdoutLine(id, line);
-    });
-
-    proc.on("exit", (code) => {
-      if (agent.status !== "closed") {
-        agent.status = code !== 0 && code !== null ? "crashed" : "closed";
-        if (code !== 0 && code !== null) agent.error = `Process exited with code ${code}`;
-        this.resolveWaiters(agent);
-        this.notifyUpdate(id);
-      }
-    });
-
-    proc.on("error", (err) => {
-      agent.status = "crashed";
-      agent.error = err.message;
-      this.resolveWaiters(agent);
-      this.notifyUpdate(id);
-    });
-
-    await new Promise<void>((resolve) => setTimeout(resolve, 200));
-
-    if (proc.exitCode !== null) {
-      agent.status = "crashed";
-      agent.error = `Process exited immediately with code ${proc.exitCode}`;
-      throw new Error(agent.error);
-    }
-
     agent.status = "idle";
     this.notifyUpdate(id);
 
@@ -506,6 +387,87 @@ export class AgentPool {
   // --------------------------------------------------------------------------
   // Private
   // --------------------------------------------------------------------------
+
+  /**
+   * Shared process launch: spawns pi, wires up stdout/stderr/exit/error handlers,
+   * waits for initialization, and registers the agent in the pool.
+   */
+  private async launchProcess(
+    id: string,
+    piArgs: string[],
+    sessionFile: string,
+    options: { agentType?: string; taskPreview?: string },
+  ): Promise<ManagedAgent> {
+    const env: Record<string, string> = {
+      ...process.env as Record<string, string>,
+      PI_SUBAGENT_DEPTH: String(getCurrentDepth() + 1),
+    };
+
+    const proc = spawn("pi", piArgs, {
+      cwd: process.cwd(),
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const agent: ManagedAgent = {
+      id,
+      process: proc,
+      status: "starting",
+      agentType: options.agentType,
+      sessionFile,
+      startTime: Date.now(),
+      lastOutput: null,
+      taskPreview: options.taskPreview ?? "(no task)",
+      toolCount: 0,
+      tokenCount: 0,
+      pendingRequests: new Map(),
+      requestCounter: 0,
+      idleResolvers: new Set(),
+    };
+
+    this.agents.set(id, agent);
+
+    agent.stdoutCleanup = attachLineReader(proc.stdout!, (line) => {
+      this.handleStdoutLine(id, line);
+    });
+
+    proc.on("exit", (code) => {
+      if (agent.status !== "closed") {
+        if (code !== 0 && code !== null) {
+          agent.status = "crashed";
+          agent.error = `Process exited with code ${code}`;
+        } else {
+          agent.status = "closed";
+        }
+        this.resolveWaiters(agent);
+        this.notifyUpdate(id);
+      }
+    });
+
+    proc.on("error", (err) => {
+      agent.status = "crashed";
+      agent.error = err.message;
+      this.resolveWaiters(agent);
+      this.notifyUpdate(id);
+    });
+
+    let stderrBuf = "";
+    proc.stderr?.on("data", (d: Buffer) => {
+      stderrBuf += d.toString();
+      if (stderrBuf.length > 10_000) stderrBuf = stderrBuf.slice(-5_000);
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 200));
+
+    if (proc.exitCode !== null) {
+      agent.status = "crashed";
+      agent.error = `Process exited immediately with code ${proc.exitCode}. ${stderrBuf}`;
+      this.resolveWaiters(agent);
+      throw new Error(agent.error);
+    }
+
+    return agent;
+  }
 
   private handleStdoutLine(agentId: string, line: string): void {
     const agent = this.agents.get(agentId);

@@ -28,7 +28,6 @@ import {
 // Widget rendering
 // ============================================================================
 
-const ACCENT = "\x1b[38;2;77;163;255m";
 const DIM = "\x1b[2m";
 const RST = "\x1b[0m";
 
@@ -48,16 +47,19 @@ function renderAgentWidget(pool: AgentPool): string[] | undefined {
   const agents = pool.getAgents();
   if (agents.size === 0) return undefined;
 
-  const running = [...agents.values()].filter(
-    (a) => a.status === "starting" || a.status === "streaming",
-  );
-  const idle = [...agents.values()].filter((a) => a.status === "idle");
-  const total = agents.size;
+  // Single pass to count statuses
+  let running = 0;
+  let idle = 0;
+  for (const agent of agents.values()) {
+    if (agent.status === "starting" || agent.status === "streaming") running++;
+    else if (agent.status === "idle") idle++;
+  }
 
   const parts: string[] = [];
-  if (running.length > 0) parts.push(`${running.length} running`);
-  if (idle.length > 0) parts.push(`${idle.length} idle`);
+  if (running > 0) parts.push(`${running} running`);
+  if (idle > 0) parts.push(`${idle} idle`);
 
+  const total = agents.size;
   const lines: string[] = [];
   lines.push(`${DIM}${total} agent${total !== 1 ? "s" : ""}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}${RST}`);
 
