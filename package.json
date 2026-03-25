@@ -1,0 +1,27 @@
+{
+  "name": "pi-subagents",
+  "version": "0.1.0",
+  "description": "Codex-style multi-agent orchestration for pi — spawn, communicate with, and coordinate sub-agents via LLM tool calls",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "author": "minghinmatthewlam",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/minghinmatthewlam/pi-subagents.git"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test:e2e": "node --experimental-strip-types --test test/e2e.test.ts"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extension/index.ts"
+    ]
+  }
+}
