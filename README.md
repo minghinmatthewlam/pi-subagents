@@ -4,7 +4,9 @@ Codex-style multi-agent orchestration for [pi](https://github.com/badlogic/pi-mo
 
 Sub-agents are invisible child `pi --mode rpc` processes. No terminal multiplexer required, no TUI overlay. The LLM orchestrates everything through 5 tools.
 
-https://github.com/user-attachments/assets/00fcf919-a981-4695-bb80-5282c1cfb9be
+<p align="center">
+  <img src="assets/demo.gif" alt="pi-subagents demo" width="700">
+</p>
 
 ## Install
 
